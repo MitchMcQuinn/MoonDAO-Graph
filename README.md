@@ -28,8 +28,8 @@ This project utilizes a Neo4j graph database to store and analyze structured dat
 
 1. **Clone the Repository**
 ```bash
-   git clone https://github.com/yourusername/spaceflight-news-graph.git
-   cd spaceflight-news-graph
+git clone https://github.com/yourusername/spaceflight-news-graph.git
+cd spaceflight-news-graph
 ```
 
 3. Create a Virtual Environment
@@ -52,10 +52,9 @@ NEO4J_PASSWORD=your_neo4j_password
 OPENAI_API_KEY=your_openai_api_key
 ```
 2. Configure Neo4j
-```bash
-	•	Start your Neo4j instance.
-	•	Set the authentication details as specified in your .env file.
-```
+• Start your Neo4j instance.
+• Set the authentication details as specified in your .env file.
+
 ## Graph Schema
 
 Nodes
