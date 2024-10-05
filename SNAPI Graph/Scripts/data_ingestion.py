@@ -54,7 +54,21 @@ from typing import List
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-load_dotenv()
+# Get the directory of the current script
+script_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Construct the path to the .env file (assuming it's in the parent directory)
+dotenv_path = os.path.join(script_dir, '..', '.env')
+
+# Load the .env file
+load_dotenv(dotenv_path)
+
+# Debug log the environment variables (mask the API key for security)
+logger = logging.getLogger(__name__)
+logger.debug(f"NEO4J_URI: {os.getenv('NEO4J_URI')}")
+logger.debug(f"NEO4J_USER: {os.getenv('NEO4J_USER')}")
+logger.debug(f"NEO4J_PASSWORD: {'*' * len(os.getenv('NEO4J_PASSWORD', ''))}")
+logger.debug(f"OPENAI_API_KEY: {'*' * len(os.getenv('OPENAI_API_KEY', ''))}")
 
 NEO4J_URI = os.getenv("NEO4J_URI")
 NEO4J_USER = os.getenv("NEO4J_USER")
@@ -89,17 +103,18 @@ prompt = ChatPromptTemplate.from_template(
     "For each keyword, provide a relevance score between 0 and 1, and include a sentence from the article that provides context. "
     "Provide the output in the specified format.\n\n"
     "Important: Do not include time-related terms or date formats as keywords or topics. "
-    "Focus on the substantive content of the article.\n\n"
+    "Focus on the substantive content of the article, and if the article is not substantive, skip it.\n\n"
     "Article: {article}\n\n"
     "{format_instructions}"
 )
-
+# Fetch articles from the Spaceflight News API
 def fetch_articles():
     response = requests.get(SPACEFLIGHT_NEWS_API_URL)
     response.raise_for_status()
     data = response.json()
     return data['results']
 
+# Process an article to extract keywords and topics
 def process_article(article):
     try:
         # Combine title and summary for analysis
@@ -122,6 +137,7 @@ def process_article(article):
         logging.error(f"Validation error processing article {article['id']}: {ve}")
         # Handle or re-raise exception as needed
 
+# Ingest articles into the Neo4j database
 def ingest_articles(articles):
     with driver.session() as session:
         for article in articles:
@@ -177,12 +193,14 @@ def ingest_articles(articles):
     
     logging.info(f"Attempted to ingest {len(articles)} articles into the database.")
 
+# Verify the ingestion by counting the articles in the database
 def verify_ingestion():
     with driver.session() as session:
         result = session.run("MATCH (a:Article) RETURN count(a) AS article_count")
         article_count = result.single()['article_count']
         logging.info(f"Number of articles in the database: {article_count}")
 
+# Main execution block
 if __name__ == "__main__":
     try:
         articles = fetch_articles()

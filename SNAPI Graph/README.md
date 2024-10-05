@@ -75,42 +75,10 @@ Nodes
 3. Keyword
 • word: String
 
-4. Source
-• name: String
-• url: String
-• credibility_score: Float
-
-5. Event
-• name: String
-• date: DateTime
-• location: String
-• description: Text
-
-6. Organization
-• name: String
-• type: String (e.g., company, agency)
-• industry: String
-• country: String
-
-7. Person
-• name: String
-• role: String
-• affiliation: String
-
-8. NewsletterIssue
-• issue_date: DateTime
-• content: Text
-• created_at: DateTime
-
 Relationships
-• (Article)-[:HAS_TOPIC]->(Topic)
 • (Article)-[:CONTAINS_KEYWORD]->(Keyword)
-• (Article)-[:FROM_SOURCE]->(Source)
-• (Article)-[:MENTIONS]->(Organization|Person|Event)
-• (Topic)-[:RELATED_TO]->(Topic)
-• (Organization)-[:ASSOCIATED_WITH]->(Event)
-• (Person)-[:AFFILIATED_WITH]->(Organization)
-• (NewsletterIssue)-[:INCLUDES]->(Article)
+• (Keyword)-[:BELONGS_TO]->(Topic)
+
 
 ## Usage
 
