@@ -1,4 +1,4 @@
-# Environment variables
+# Environment Variables
 .env
 
 # Python
@@ -36,3 +36,6 @@ dist/
 
 # Jupyter Notebooks
 .ipynb_checkpoints
+
+# Obsidian
+.obsidian/
