@@ -50,6 +50,8 @@ from langchain.prompts import ChatPromptTemplate
 from langchain.output_parsers import PydanticOutputParser
 from pydantic import BaseModel, Field, ValidationError
 from typing import List
+import time
+from datetime import datetime, timedelta
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -107,12 +109,44 @@ prompt = ChatPromptTemplate.from_template(
     "Article: {article}\n\n"
     "{format_instructions}"
 )
-# Fetch articles from the Spaceflight News API
+# Fetch articles from the Spaceflight News API within the last 7 days
 def fetch_articles():
-    response = requests.get(SPACEFLIGHT_NEWS_API_URL)
-    response.raise_for_status()
-    data = response.json()
-    return data['results']
+    all_articles = []
+    page = 0
+    limit = 100  # Maximum allowed by the API
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=7)
+    
+    while True:
+        try:
+            params = {
+                'limit': limit,
+                'offset': page * limit,
+                'published_at_gte': start_date.isoformat(),
+                'published_at_lte': end_date.isoformat(),
+                'ordering': '-published_at'  # Latest articles first
+            }
+            response = requests.get(SPACEFLIGHT_NEWS_API_URL, params=params)
+            response.raise_for_status()
+            data = response.json()
+            
+            articles = data['results']
+            all_articles.extend(articles)
+            
+            if len(articles) < limit:
+                break  # No more articles to fetch
+            
+            page += 1
+            
+            # Respect rate limits (10 requests per second)
+            time.sleep(0.1)
+        
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error fetching articles: {e}")
+            break
+    
+    logging.info(f"Fetched {len(all_articles)} articles from the last 7 days.")
+    return all_articles
 
 # Process an article to extract keywords and topics
 def process_article(article):
@@ -142,6 +176,15 @@ def ingest_articles(articles):
     with driver.session() as session:
         for article in articles:
             try:
+                # Check if the article already exists in the database
+                result = session.run(
+                    "MATCH (a:Article {id: $id}) RETURN a.id AS id",
+                    id=article['id']
+                )
+                if result.single():
+                    logging.info(f"Article with ID {article['id']} already exists. Skipping.")
+                    continue
+
                 # Process the article to extract keywords and topics
                 analysis = process_article(article)
                 
