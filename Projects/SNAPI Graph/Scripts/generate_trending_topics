@@ -1,0 +1,212 @@
+import os
+from neo4j import GraphDatabase
+from dotenv import load_dotenv
+from datetime import datetime
+import logging
+from langchain_openai import ChatOpenAI
+from langchain.prompts import ChatPromptTemplate
+from langchain.output_parsers import StructuredOutputParser, ResponseSchema
+
+# Set up logging for better debugging and monitoring
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Load environment variables
+load_dotenv()
+NEO4J_URI = os.getenv('NEO4J_URI')
+NEO4J_USER = os.getenv('NEO4J_USER')
+NEO4J_PASSWORD = os.getenv('NEO4J_PASSWORD')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+
+class TrendingTopicsGenerator:
+    def __init__(self):
+        logging.info("Initializing TrendingTopicsGenerator")
+        # Initialize Neo4j driver and OpenAI language model
+        self.driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+        self.llm = ChatOpenAI(temperature=0.7, model_name='gpt-4')
+        logging.info("Initialization complete")
+
+    def fetch_trending_topics(self):
+        logging.info("Fetching trending topics")
+        # This method queries the Neo4j database to fetch trending topics and related articles
+        query = '''
+        // Step 1: Identify the Top 3 Topics by Article Count
+        MATCH (t:Topic)<-[:BELONGS_TO]-(:Keyword)<-[:CONTAINS_KEYWORD]-(a:Article)
+        
+        WITH t, COUNT(DISTINCT a) AS articleCount
+        ORDER BY articleCount DESC
+        LIMIT 3  // Limit to top 3 topics
+
+        // Step 2: For Each Top Topic, Retrieve the Top 2 Articles by Relevance Score
+        // and collect the connecting Keyword nodes
+        CALL {
+            WITH t
+            MATCH (t)<-[:BELONGS_TO]-(k:Keyword)<-[:CONTAINS_KEYWORD]-(a:Article)
+            WITH t, a, k
+            ORDER BY a.relevance_score DESC
+            LIMIT 2  // Limit to top 2 articles per topic
+            RETURN a, k
+        }
+
+        // Step 3: Collect All Relevant Nodes and Relationships for Graph Visualization
+        RETURN DISTINCT 
+            t,          // Topic Node
+            a,          // Article Node
+            k           // Keyword Node
+        '''
+        # Execute the query and process the results
+        with self.driver.session() as session:
+            result = session.run(query)
+            topics = {}
+            for record in result:
+                # Extract data from each record
+                topic = record['t']['name']
+                article = record['a']
+                keyword = record['k']['word']
+                
+                # Organize data into a structured format
+                if topic not in topics:
+                    topics[topic] = {
+                        'articles': [],
+                        'keywords': set()
+                    }
+                
+                # Check if the article is already in the list of articles for this topic
+                if article not in topics[topic]['articles']:
+                    # Add the article to the list of articles for this topic
+                    topics[topic]['articles'].append({
+                        'title': article['title'],
+                        'url': article['url'],
+                        'image_url': article.get('image_url'),
+                        'summary': article['summary'],
+                        'relevance_score': article['relevance_score']
+                    })
+                
+                # Add the keyword to the set of keywords for this topic
+                topics[topic]['keywords'].add(keyword)
+            
+            # Convert the topics dictionary to a list of dictionaries for easier processing
+            return [
+                {
+                    'topic': topic,
+                    'articles': topic_data['articles'],
+                    'keywords': list(topic_data['keywords']),
+                    'articleCount': len(topic_data['articles'])
+                }
+                for topic, topic_data in topics.items()
+            ]
+
+    def generate_article(self, topics):
+        logging.info("Generating article")
+        
+        # Define the output schema
+        response_schemas = [
+            ResponseSchema(name="header", description="A snappy header that summarizes the main topics"),
+            ResponseSchema(name="intro", description="A brief introduction summarizing the articles"),
+            ResponseSchema(name="content", description="The main content of the article, including topic summaries, images, and links"),
+            ResponseSchema(name="outro", description="A one-line sentence summarizing the trends"),
+        ]
+        output_parser = StructuredOutputParser.from_response_schemas(response_schemas)
+
+        format_instructions = output_parser.get_format_instructions()
+
+        prompt_template = ChatPromptTemplate.from_template(
+            '''You are a news journalist writing an article for a weekly space newsletter that maintains a light-hearted and engaging tone. 
+            You have information about the top articles related to trending topics in space news this week, along with associated keywords and topics. 
+            Your task is to compose an engaging article covering these topics, following the structure and rules below:
+
+            1. Create a snappy header that summarizes the main topics.
+            2. Write a brief introduction summarizing the articles.
+            3. For each of the three topics:
+            a. Create a header summarizing the topic.
+            b. Write a summary of the topic's associated articles, including:
+                - Only one image, in markdown format and on a new line, for each keyword connected to the topic. For example, if a topic has only one keyword, it should display only one image. If a topic has two keywords, it should display two images (one for each article), etc.
+                - Links to each article referenced in the topic, using markdown syntax and creative call-to-action text.
+            c. Before adding a link or image to a topic summary, check if it has already been used in a previous topic summary. If so, skip it.
+            d. If a topic has no articles that haven't already been used, skip the entire topic.
+            4. Conclude with a summary of the trends.
+
+            Here is the data for the trending topics and their articles:
+
+            {topics_data}
+
+            {format_instructions}
+            '''
+        )
+
+        # Format the topics data for the prompt
+        topics_data = ''
+        for topic in topics:
+            topics_data += f"Topic: {topic['topic']}\n"
+            topics_data += f"Keywords: {', '.join(topic['keywords'])}\n"
+            topics_data += f"Article Count: {topic['articleCount']}\n"
+            for article in topic['articles']:
+                topics_data += f"  Article:\n"
+                topics_data += f"    Title: {article['title']}\n"
+                topics_data += f"    URL: {article['url']}\n"
+                if article.get('image_url'):
+                    topics_data += f"    Image URL: {article['image_url']}\n"
+                topics_data += f"    Summary: {article['summary']}\n"
+                topics_data += f"    Relevance Score: {article['relevance_score']}\n"
+            topics_data += "\n"
+
+        # Generate the article using the language model
+        prompt = prompt_template.format_prompt(topics_data=topics_data, format_instructions=format_instructions)
+        response = self.llm(prompt.to_messages())
+        
+        # Parse the response
+        parsed_output = output_parser.parse(response.content)
+        
+        # Format the parsed output into a markdown string
+        markdown_output = f"""# {parsed_output['header']}
+
+        {parsed_output['intro']}
+
+        {parsed_output['content']}
+
+        {parsed_output['outro']}
+        """
+        return markdown_output
+
+    def save_markdown(self, content):
+        # This method saves the generated article as a markdown file
+        output_dir = os.path.join(os.getcwd(), 'Outputs')
+        os.makedirs(output_dir, exist_ok=True)
+        base_filename = f"trending_topics_{datetime.now().strftime('%Y%m%d')}.md"
+        file_path = os.path.join(output_dir, base_filename)
+        
+        # Handle file versioning if a file with the same name already exists
+        version = 1
+        while os.path.exists(file_path):
+            version += 1
+            file_path = os.path.join(output_dir, f"trending_topics_{datetime.now().strftime('%Y%m%d')}({version}).md")
+        
+        # Write the content to the file
+        with open(file_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"Article generated at {file_path}")
+
+    def close(self):
+        # Close the Neo4j driver connection
+        self.driver.close()
+
+if __name__ == '__main__':
+    logging.info("Script started")
+    # Main execution flow
+    generator = TrendingTopicsGenerator()
+    
+    # Fetch trending topics from the database
+    topics = generator.fetch_trending_topics()
+    
+    if topics:
+        logging.info(f"Found {len(topics)} trending topics")
+        # Generate the article
+        article = generator.generate_article(topics)
+        
+        # Save the final article as a markdown file
+        generator.save_markdown(article)
+    else:
+        logging.warning('No trending topics found.')
+    
+    # Close the database connection
+    generator.close()
+    logging.info("Script completed")
